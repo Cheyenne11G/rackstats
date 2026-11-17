@@ -1,7 +1,9 @@
 node_modules/
 dist/
+dist-staging/
 .env
 .env.*
+!.env.example
 .DS_Store
 *.swp
 src/RackStats.jsx.backup*

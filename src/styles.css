@@ -108,3 +108,9 @@
     padding: 14px;
   }
 }
+
+/* Environment banner: only applied in staging (see src/EnvBanner.jsx). */
+.env-banner{position:fixed;top:0;left:0;right:0;height:28px;z-index:100;display:flex;align-items:center;justify-content:center;padding:0 12px;background:#f5b301;color:#1a1300;font:700 11px/1 'DM Sans',sans-serif;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.env-staging .sidebar{top:28px}
+.env-staging .topbar{top:28px}
+.env-staging .main-area{padding-top:28px}

@@ -4,9 +4,13 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
+    "dev": "vite --mode staging --host 0.0.0.0",
+    "dev:live": "vite --mode live --host 0.0.0.0",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "build:staging": "vite build --mode staging --outDir dist-staging",
+    "preview": "vite preview --host 0.0.0.0",
+    "preview:staging": "vite preview --mode staging --outDir dist-staging --host 0.0.0.0",
+    "test": "node --test \"tests/**/*.test.js\""
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.118.0",
