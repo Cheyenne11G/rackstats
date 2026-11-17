@@ -6,3 +6,6 @@ dist/
 *.swp
 src/RackStats.jsx.backup*
 src/RackStats.jsx.before-*
+# Database schema exports (never commit)
+db-schema-live.json
+db-schema-staging.json
