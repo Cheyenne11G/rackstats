@@ -91,6 +91,11 @@ const writeStoredLeague = (userId, leagueId) => {
   try { localStorage.setItem(activeLeagueKey(userId), leagueId); } catch {}
 };
 
+// Supabase IDs are UUIDs. Locally generated uid() values (e.g. "b343xz6") are not,
+// and must never be sent to Supabase as a league_id.
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid = value => typeof value === 'string' && UUID_PATTERN.test(value);
+
 const toUiLeagues = leagues => (leagues ?? []).map(league => ({
   id: league.id,
   name: league.name,
@@ -275,6 +280,7 @@ export default function RackStats(){
   const [leagueError,setLeagueError] = useState('');
   const workspaceRequestRef = useRef(0);
   const leagueRequestRef = useRef(0);
+  const creatingLeagueRef = useRef(false);
  const [page,setPage] = useState('signup');
 const [leagueSetupMode, setLeagueSetupMode] = useState('choose');
 const [leagueName, setLeagueName] = useState('');
@@ -451,6 +457,14 @@ const resetWorkspace = () => {
 // Resolves to true when the league loaded successfully.
 const reloadLeague = async leagueId => {
   if (!leagueId) return false;
+
+  // Safeguard: never query Supabase with a local-only (non-UUID) league ID.
+  // The current league and its data are left untouched.
+  if (!isUuid(leagueId)) {
+    console.error('Refusing to load a league with a non-Supabase ID:', leagueId);
+    setToast('This league has not been saved to the server, so its data cannot be loaded.');
+    return false;
+  }
 
   const requestId = ++leagueRequestRef.current;
 
@@ -1239,7 +1253,50 @@ const renderAdmin=()=>{const tabs=['Matches','1v1 fixtures','Teams','Players','L
   }));
 
   setToast(isEdit?'Team updated':'Team added');
-}else if(['league','edit-league'].includes(kind)){const l={name:v.name,season:v.season||'2026 Season'};if(isEdit)update('leagues',item.id,l);else add('leagues',l);setToast(isEdit?'League updated':'League added');}else if(['venue','edit-venue'].includes(kind)){const vnu={name:v.name,location:v.location,tables:Number(v.tables||1)};if(isEdit)update('venues',item.id,vnu);else add('venues',vnu);setToast(isEdit?'Venue updated':'Venue added');}else if(baseKind==='score'){const isCh=modal.type==='challenge';const arr=isCh?'challenges':'matches';const patch=isCh?{scoreA:Number(v.scoreA),scoreB:Number(v.scoreB)}:{homeScore:Number(v.homeScore),awayScore:Number(v.awayScore)};update(arr,item.id,patch);setToast('Score saved');}setModal(null)};
+}else if(kind==='edit-league'){
+  // TEMPORARY, LOCAL-ONLY: league edits are not yet saved to Supabase.
+  // They last until the next refresh or league reload. Migrate with an owner-only update (migration step 8).
+  update('leagues',item.id,{name:v.name,season:v.season||'2026 Season'});
+  setToast('League updated on this device only. Not yet saved to the server.');
+}else if(kind==='league'){
+  // Creates the league in Supabase via the existing create_league RPC.
+  // The league ID is always the UUID returned by Supabase, never uid().
+  if(creatingLeagueRef.current)return;
+  const name=(v.name||'').trim();
+  const season=(v.season||'').trim()||'2026 Season';
+  if(name.length<2){setToast('League name must be at least 2 characters.');return;}
+
+  creatingLeagueRef.current=true;
+  try{
+    const {data:result,error}=await supabase.rpc('create_league',{p_name:name,p_season:season});
+    if(error){setToast('Could not create league: '+error.message);return;}
+
+    const createdLeague=Array.isArray(result)?result[0]:result;
+    if(!createdLeague?.id||!isUuid(createdLeague.id)){
+      setToast('The league was created, but its details could not be loaded. Please refresh.');
+      setModal(null);
+      return;
+    }
+
+    setModal(null);
+
+    // Reload all of the user's leagues and roles from Supabase, then load the new league.
+    const workspace=await loadUserWorkspace(user.id,createdLeague.id);
+    if(!workspace||!workspace.ok)return;
+
+    if(!workspace.leagues.some(l=>l.id===createdLeague.id)){
+      setToast('The league was created, but it is not visible to your account yet. Please log out and back in.');
+      return;
+    }
+
+    setToast(workspace.leagueLoaded?'League created successfully!':'League created, but its data could not be loaded.');
+  }catch(err){
+    setToast('Could not create league: '+(err?.message||'Unknown error'));
+  }finally{
+    creatingLeagueRef.current=false;
+  }
+  return;
+}else if(['venue','edit-venue'].includes(kind)){const vnu={name:v.name,location:v.location,tables:Number(v.tables||1)};if(isEdit)update('venues',item.id,vnu);else add('venues',vnu);setToast(isEdit?'Venue updated':'Venue added');}else if(baseKind==='score'){const isCh=modal.type==='challenge';const arr=isCh?'challenges':'matches';const patch=isCh?{scoreA:Number(v.scoreA),scoreB:Number(v.scoreB)}:{homeScore:Number(v.homeScore),awayScore:Number(v.awayScore)};update(arr,item.id,patch);setToast('Score saved');}setModal(null)};
     const field=(label,name,def='',type='text',opts=null,required=false)=><label className="form-field"><span>{label}</span>{opts?<select name={name} defaultValue={def} required={required}>{opts.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}</select>:<input name={name} type={type} defaultValue={def} required={required}/>}</label>;
     let title='';let fields=[];
     if(baseKind==='match'||baseKind==='challenge'){const ch=baseKind==='challenge';title=(isEdit?'Edit ':'New ')+(ch?'1v1 fixture':'team fixture');fields=[field('Date & time','date',item.date||'2026-10-24T18:00','datetime-local',null,true),...(ch?[field('Player A','playerAId',item.playerAId||players[0]?.id,'text',players.map(p=>({value:p.id,label:p.name})),true),field('Player B','playerBId',item.playerBId||players[1]?.id,'text',players.map(p=>({value:p.id,label:p.name})),true),field('Race to','raceTo',item.raceTo||5,'number')]:[field('Home team','homeId',item.homeId||teams[0]?.id,'text',teams.map(t=>({value:t.id,label:t.name})),true),field('Away team','awayId',item.awayId||teams[1]?.id,'text',teams.map(t=>({value:t.id,label:t.name})),true)]),field('Venue','venueId',item.venueId||data.venues[0]?.id,'text',data.venues.map(v=>({value:v.id,label:v.name})),true),field('Table number','table',item.table||1,'number'),field('Queue position','queue',item.queue||1,'number'),field('Status','status',item.status||'Upcoming','text',['Upcoming','In Progress','Finished'].map(s=>({value:s,label:s}))),...(ch?[field('Player A score','scoreA',item.scoreA||0,'number'),field('Player B score','scoreB',item.scoreB||0,'number')]:[field('Home score','homeScore',item.homeScore||0,'number'),field('Away score','awayScore',item.awayScore||0,'number'),field('Notes','note',item.note||'League fixture')])];}
@@ -1250,7 +1307,7 @@ const renderAdmin=()=>{const tabs=['Matches','1v1 fixtures','Teams','Players','L
     else if(baseKind==='league'||baseKind==='edit-league'){title=isEdit?'Edit league':'Add league';fields=[field('League name','name',item.name||'','text',null,true),field('Season','season',item.season||'2026 Season')];}
     else if(baseKind==='venue'||baseKind==='edit-venue'){title=isEdit?'Edit venue':'Add venue';fields=[field('Venue name','name',item.name||'','text',null,true),field('Location','location',item.location||''),field('Number of tables','tables',item.tables||4,'number')];}
     else if(baseKind==='score'){const ch=modal.type==='challenge';title='Update score';fields=ch?[field(`${playerBy(item.playerAId)?.name||'Player A'} score`,'scoreA',item.scoreA||0,'number'),field(`${playerBy(item.playerBId)?.name||'Player B'} score`,'scoreB',item.scoreB||0,'number')]:[field(`${teamBy(item.homeId)?.name||'Home'} score`,'homeScore',item.homeScore||0,'number'),field(`${teamBy(item.awayId)?.name||'Away'} score`,'awayScore',item.awayScore||0,'number')];}
-    return <Modal title={title} onClose={()=>setModal(null)} wide={baseKind==='edit-player'}><form className="form-grid" onSubmit={submit}>{fields}{baseKind==='edit-player'&&<p className="form-hint">Frame difference and win percentage are calculated automatically from these values.</p>}<div className="modal-actions"><button type="button" className="secondary-btn" onClick={()=>setModal(null)}>Cancel</button><button type="submit" className="primary-btn"><Check size={15}/> Save changes</button></div></form></Modal>;
+    return <Modal title={title} onClose={()=>setModal(null)} wide={baseKind==='edit-player'}><form className="form-grid" onSubmit={submit}>{fields}{baseKind==='edit-player'&&<p className="form-hint">Frame difference and win percentage are calculated automatically from these values.</p>}{kind==='edit-league'&&<p className="form-hint">League edits are temporarily saved on this device only and will be lost on refresh.</p>}<div className="modal-actions"><button type="button" className="secondary-btn" onClick={()=>setModal(null)}>Cancel</button><button type="submit" className="primary-btn"><Check size={15}/> Save changes</button></div></form></Modal>;
   };
 
   return <div className="app-shell"><aside className={cx('sidebar',mobileMenu&&'sidebar-open')}><div className="brand"><div className="brand-icon"><div className="brand-eight">8</div></div><div><strong>RACK<span>STATS</span></strong><small>POOL, TRACKED.</small></div><button className="mobile-close icon-btn" onClick={()=>setMobileMenu(false)}><X size={18}/></button></div><div className="league-select-wrap"><span className="nav-caption">ACTIVE LEAGUE</span><div className="league-select"><span className="league-icon"><Trophy size={15}/></span><select value={activeLeague} onChange={e=>setLeague(e.target.value)}>{data.leagues.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}</select><ChevronDown size={14}/></div><button className="secondary-btn" style={{width:'100%',marginTop:8}} onClick={()=>{setLeagueSetupMode('join');setPage('league-setup')}}>+ Join another league</button></div><div className="nav-caption nav-heading">MENU</div><nav className="side-nav">{NAV.filter(n => n.id !== 'admin' || currentRole === 'owner' || currentRole === 'organiser').map(n=><button key={n.id} className={cx('nav-item',page===n.id||(page==='player'&&n.id==='players')||(page==='match-detail'&&n.id==='matches')?'active':'')} onClick={()=>{setPage(n.id);setMobileMenu(false)}}><n.icon size={18}/><span>{n.label}</span>{n.id==='night'&&<span className="nav-live"/>}</button>)}</nav><div className="sidebar-bottom"><div className="season-card"><div className="season-icon"><Award size={17}/></div><div><strong>{league?.season||'2026 Season'}</strong><small>Season in progress</small></div><span className="green-indicator"/></div><button className="user-mini" onClick={()=>setPage('profile')}><div className="admin-avatar">RS</div><div><strong>League Admin</strong><small>Administrator</small></div><Settings size={15}/></button></div></aside>
