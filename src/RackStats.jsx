@@ -157,6 +157,39 @@ async function loadUserLeagues(userId) {
   );
 }
 
+// Maps a Supabase `players` row to the UI player shape.
+// Used by loadLeagueData and by Add Player, so both produce identical objects.
+function mapPlayerRow(row){
+  return {
+    id:row.id,
+    name:row.name||'',
+    teamId:row.team_id||'',
+    rank:Number(row.rank)||0,
+    played:Number(row.played)||0,
+    wins:Number(row.wins)||0,
+    losses:Number(row.losses)||0,
+    framesWon:Number(row.frames_won)||0,
+    framesLost:Number(row.frames_lost)||0,
+    goldenBreaks:Number(row.golden_breaks)||0,
+    runOutBnF:Number(row.run_out_bnf)||0,
+    dryBreaks:Number(row.dry_breaks)||0,
+    successfulBreaks:Number(row.successful_breaks)||0,
+    potsMade:Number(row.pots_made)||0,
+    shotsTaken:Number(row.shots_taken)||0,
+    email:row.email||'',
+    avatar:row.avatar||'',
+    form:Array.isArray(row.form)?row.form:[]
+  };
+}
+
+// Reads a numeric form value. A blank or invalid value keeps `fallback`
+// (the existing value when editing), so stats are never silently reset to 0.
+const numOr = (value, fallback = 0) => {
+  if (value === undefined || value === null || String(value).trim() === '') return Number(fallback) || 0;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : (Number(fallback) || 0);
+};
+
 async function loadLeagueData(leagueId){
   const [playersResult,teamsResult,venuesResult,matchesResult,challengesResult] = await Promise.all([
     supabase.from('players').select('*').eq('league_id',leagueId),
@@ -180,26 +213,7 @@ async function loadLeagueData(leagueId){
     throw failed.error;
   }
 
-  const players = (playersResult.data||[]).map(row=>({
-    id:row.id,
-    name:row.name||'',
-    teamId:row.team_id||'',
-    rank:Number(row.rank)||0,
-    played:Number(row.played)||0,
-    wins:Number(row.wins)||0,
-    losses:Number(row.losses)||0,
-    framesWon:Number(row.frames_won)||0,
-    framesLost:Number(row.frames_lost)||0,
-    goldenBreaks:Number(row.golden_breaks)||0,
-    runOutBnF:Number(row.run_out_bnf)||0,
-    dryBreaks:Number(row.dry_breaks)||0,
-    successfulBreaks:Number(row.successful_breaks)||0,
-    potsMade:Number(row.pots_made)||0,
-    shotsTaken:Number(row.shots_taken)||0,
-    email:row.email||'',
-    avatar:row.avatar||'',
-    form:Array.isArray(row.form)?row.form:[]
-  }));
+  const players = (playersResult.data||[]).map(mapPlayerRow);
 
   const teams = (teamsResult.data||[]).map(row=>({
     id:row.id,
@@ -281,6 +295,7 @@ export default function RackStats(){
   const workspaceRequestRef = useRef(0);
   const leagueRequestRef = useRef(0);
   const creatingLeagueRef = useRef(false);
+  const savingPlayerRef = useRef(false);
  const [page,setPage] = useState('signup');
 const [leagueSetupMode, setLeagueSetupMode] = useState('choose');
 const [leagueName, setLeagueName] = useState('');
@@ -1210,14 +1225,140 @@ const renderAdmin=()=>{const tabs=['Matches','1v1 fixtures','Teams','Players','L
 {adminTab==='Settings'&&<div className="panel settings-panel"><div className="settings-line"><div><strong>Match reminders</strong><p>Reminder timing preference for players.</p></div><select className="select" defaultValue="60"><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">60 minutes</option><option value="120">2 hours</option></select></div><div className="settings-line"><div><strong>In-app notifications</strong><p>Queue and match-start banners.</p></div><span className="pill green-pill">Enabled in prototype</span></div><div className="settings-line"><div><strong>Email delivery</strong><p>Requires a backend email provider and scheduled server job.</p></div><span className="pill warning-pill">Not connected</span></div><div className="settings-line"><div><strong>Google Calendar sync</strong><p>Individual player account connection was not authorised.</p></div><span className="pill">Not connected</span></div><div className="settings-line"><div><strong>Data storage</strong><p>Prototype currently saves to this browser's local storage.</p></div><span className="pill warning-pill">Local only</span></div></div>}</div>};
   function AdminMatches({items,type}){const ch=type==='challenge';return <div className="panel"><div className="admin-head"><div><h3>{ch?'1v1 fixtures':'Team fixtures'}</h3><p>Scores, status, venue, table and queue order.</p></div><button className="primary-btn" onClick={()=>setModal({kind:ch?'challenge':'match'})}><Plus size={15}/> Add fixture</button></div><div className="admin-list">{items.sort((a,b)=>new Date(a.date)-new Date(b.date)).map(m=><div className="admin-row" key={m.id}><div className={cx('admin-status-icon',m.status==='In Progress'?'live-bg':m.status==='Finished'?'done-bg':'upcoming-bg')}>{ch?<Swords size={16}/>:<CalendarDays size={16}/>}</div><div className="admin-row-main"><strong>{ch?`${playerBy(m.playerAId)?.name||'Player'} vs ${playerBy(m.playerBId)?.name||'Player'}`:`${teamBy(m.homeId)?.name||'Team'} vs ${teamBy(m.awayId)?.name||'Team'}`}</strong><small>{fmtFull(m.date)} · {venueBy(m.venueId)?.name||'Venue'} · Table {m.table} · Queue #{m.queue||'—'}</small><small>{m.status}{m.status==='Finished'?` · ${ch?m.scoreA+'–'+m.scoreB:m.homeScore+'–'+m.awayScore}`:''}</small></div><button className="icon-btn" title="Edit" onClick={()=>setModal({kind:'edit-'+(ch?'challenge':'match'),item:m})}><Pencil size={15}/></button><button className="icon-btn danger-icon" title="Delete" onClick={()=>remove(ch?'challenges':'matches',m.id)}><Trash2 size={15}/></button></div>)}</div></div>}
 
-  const renderModal=()=>{if(!modal)return null;const kind=modal.kind;const item=modal.item||{};const isEdit=kind.startsWith('edit-');const baseKind=isEdit?kind.slice(5):kind;const submit=async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const v=Object.fromEntries(fd.entries());if(['match','challenge'].includes(baseKind)){const type=baseKind==='challenge';const entity={leagueId:activeLeague,date:v.date,venueId:v.venueId,table:Number(v.table||1),status:v.status||'Upcoming',queue:Number(v.queue||1),...(type?{playerAId:v.playerAId,playerBId:v.playerBId,raceTo:Number(v.raceTo||5),scoreA:Number(v.scoreA||0),scoreB:Number(v.scoreB||0)}:{homeId:v.homeId,awayId:v.awayId,homeScore:Number(v.homeScore||0),awayScore:Number(v.awayScore||0),note:v.note||'League fixture'})};const arr=type?'challenges':'matches';if(isEdit)update(arr,item.id,entity);else add(arr,entity);setToast(isEdit?'Fixture updated':'Fixture created');}else if(['player','edit-player'].includes(kind)){const p={name:v.name,teamId:v.teamId,rank:Number(v.rank||players.length+1),email:v.email||'',played:Number(v.played||0),wins:Number(v.wins||0),losses:Number(v.losses||0),framesWon:Number(v.framesWon||0),framesLost:Number(v.framesLost||0),goldenBreaks:Number(v.goldenBreaks||0),runOutBnF:Number(v.runOutBnF||0),dryBreaks:Number(v.dryBreaks||0),successfulBreaks:Number(v.successfulBreaks||0),potsMade:Number(v.potsMade||0),shotsTaken:Number(v.shotsTaken||0),avatar:item.avatar||'',form:item.form||[]};if(isEdit)update('players',item.id,p);else add('players',p);setToast(isEdit?'Player updated':'Player added');}else if(['team','edit-team'].includes(kind)){
+  const renderModal=()=>{if(!modal)return null;const kind=modal.kind;const item=modal.item||{};const isEdit=kind.startsWith('edit-');const baseKind=isEdit?kind.slice(5):kind;const submit=async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);const v=Object.fromEntries(fd.entries());if(['match','challenge'].includes(baseKind)){const type=baseKind==='challenge';const entity={leagueId:activeLeague,date:v.date,venueId:v.venueId,table:Number(v.table||1),status:v.status||'Upcoming',queue:Number(v.queue||1),...(type?{playerAId:v.playerAId,playerBId:v.playerBId,raceTo:Number(v.raceTo||5),scoreA:Number(v.scoreA||0),scoreB:Number(v.scoreB||0)}:{homeId:v.homeId,awayId:v.awayId,homeScore:Number(v.homeScore||0),awayScore:Number(v.awayScore||0),note:v.note||'League fixture'})};const arr=type?'challenges':'matches';if(isEdit)update(arr,item.id,entity);else add(arr,entity);setToast(isEdit?'Fixture updated':'Fixture created');}else if(kind==='edit-player'){
+  // Updates the existing Supabase `players` row (matched by its UUID and the active league UUID).
+  // Only the form's editable columns are sent; avatar, form and other columns are left untouched.
+  // Blank number fields keep the player's existing values. React state is updated only after
+  // a successful save, using the returned row. On failure the modal stays open.
+  if(savingPlayerRef.current)return;
+  const name=(v.name||'').trim();
+  if(!name){setToast('Could not update player: please enter a name.');return;}
+  if(!isUuid(item.id)){setToast('Could not update player: this player has not been saved to the server.');return;}
+  if(!isUuid(activeLeague)){setToast('Could not update player: the active league has not been saved to the server.');return;}
+  const team=teams.find(t=>t.id===v.teamId);
+  if(!team||!isUuid(team.id)){setToast('Could not update player: please choose a team in this league.');return;}
+
+  const leagueId=activeLeague;
+  const leagueRequest=leagueRequestRef.current;
+  const playerPayload={
+    name,
+    team_id:team.id,
+    email:(v.email||'').trim()||null,
+    rank:numOr(v.rank,item.rank),
+    played:numOr(v.played,item.played),
+    wins:numOr(v.wins,item.wins),
+    losses:numOr(v.losses,item.losses),
+    frames_won:numOr(v.framesWon,item.framesWon),
+    frames_lost:numOr(v.framesLost,item.framesLost),
+    golden_breaks:numOr(v.goldenBreaks,item.goldenBreaks),
+    run_out_bnf:numOr(v.runOutBnF,item.runOutBnF),
+    dry_breaks:numOr(v.dryBreaks,item.dryBreaks),
+    successful_breaks:numOr(v.successfulBreaks,item.successfulBreaks),
+    pots_made:numOr(v.potsMade,item.potsMade),
+    shots_taken:numOr(v.shotsTaken,item.shotsTaken)
+  };
+
+  savingPlayerRef.current=true;
+  try{
+    const {data:rows,error}=await supabase
+      .from('players')
+      .update(playerPayload)
+      .eq('id',item.id)
+      .eq('league_id',leagueId)
+      .select();
+
+    if(error){setToast('Could not update player: '+error.message);return;}
+
+    // RLS or a missing row makes the update match 0 rows without an error.
+    const row=rows?.[0];
+    if(!row?.id){
+      setToast('Could not update player: you may not have permission to edit players in this league, or the player no longer exists.');
+      return;
+    }
+
+    const savedPlayer=mapPlayerRow(row);
+
+    // Only touch state if the same league is still loaded (no switch or reload in the meantime).
+    if(leagueRequestRef.current===leagueRequest&&row.league_id===leagueId){
+      setData(d=>({
+        ...d,
+        // Avatar uploads are still local-only, so keep any unsaved local avatar on screen.
+        players:d.players.map(p=>p.id===savedPlayer.id?{...savedPlayer,avatar:savedPlayer.avatar||p.avatar||''}:p),
+        // Move the player between team rosters if their team changed.
+        teams:d.teams.map(t=>{
+          const others=(t.players||[]).filter(id=>id!==savedPlayer.id);
+          return t.id===savedPlayer.teamId?{...t,players:[...others,savedPlayer.id]}:{...t,players:others};
+        })
+      }));
+    }
+
+    setToast('Player updated');
+    setModal(null);
+  }catch(err){
+    setToast('Could not update player: '+(err?.message||'Unknown error'));
+  }finally{
+    savingPlayerRef.current=false;
+  }
+  return;
+}else if(kind==='player'){
+  // Inserts into Supabase `players`. React state is updated only after a successful insert,
+  // using the returned row (with its real UUID). On failure the modal stays open.
+  if(savingPlayerRef.current)return;
+  const name=(v.name||'').trim();
+  if(!name){setToast('Could not add player: please enter a name.');return;}
+  if(!isUuid(activeLeague)){setToast('Could not add player: the active league has not been saved to the server.');return;}
+  const team=teams.find(t=>t.id===v.teamId);
+  if(!team||!isUuid(team.id)){setToast('Could not add player: please choose a team in this league.');return;}
+
+  const leagueId=activeLeague;
+  const leagueRequest=leagueRequestRef.current;
+  savingPlayerRef.current=true;
+  try{
+    const {data:row,error}=await supabase
+      .from('players')
+      .insert({
+        league_id:leagueId,
+        team_id:team.id,
+        name,
+        email:(v.email||'').trim()||null,
+        rank:numOr(v.rank,players.length+1)
+      })
+      .select()
+      .single();
+
+    if(error){setToast('Could not add player: '+error.message);return;}
+    if(!row?.id){setToast('Player was saved, but could not be loaded. Please refresh.');setModal(null);return;}
+
+    const savedPlayer=mapPlayerRow(row);
+
+    // Only touch state if the same league is still loaded (no switch or reload in the meantime).
+    if(leagueRequestRef.current===leagueRequest&&row.league_id===leagueId){
+      setData(d=>({
+        ...d,
+        players:[...d.players.filter(p=>p.id!==savedPlayer.id),savedPlayer],
+        teams:d.teams.map(t=>t.id===savedPlayer.teamId
+          ?{...t,players:[...(t.players||[]).filter(id=>id!==savedPlayer.id),savedPlayer.id]}
+          :t)
+      }));
+    }
+
+    setToast('Player added');
+    setModal(null);
+  }catch(err){
+    setToast('Could not add player: '+(err?.message||'Unknown error'));
+  }finally{
+    savingPlayerRef.current=false;
+  }
+  return;
+}else if(['team','edit-team'].includes(kind)){
   const teamPayload={
     league_id:v.leagueId||activeLeague,
     name:v.name,
-    played:Number(v.played||0),
-    wins:Number(v.wins||0),
-    losses:Number(v.losses||0),
-    points:Number(v.points||0)
+    // When editing, blank fields keep the team's existing values so stats are never reset to 0.
+    played:numOr(v.played,isEdit?item.played:0),
+    wins:numOr(v.wins,isEdit?item.wins:0),
+    losses:numOr(v.losses,isEdit?item.losses:0),
+    points:numOr(v.points,isEdit?item.points:0)
   };
 
   const result=isEdit
@@ -1300,14 +1441,14 @@ const renderAdmin=()=>{const tabs=['Matches','1v1 fixtures','Teams','Players','L
     const field=(label,name,def='',type='text',opts=null,required=false)=><label className="form-field"><span>{label}</span>{opts?<select name={name} defaultValue={def} required={required}>{opts.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}</select>:<input name={name} type={type} defaultValue={def} required={required}/>}</label>;
     let title='';let fields=[];
     if(baseKind==='match'||baseKind==='challenge'){const ch=baseKind==='challenge';title=(isEdit?'Edit ':'New ')+(ch?'1v1 fixture':'team fixture');fields=[field('Date & time','date',item.date||'2026-10-24T18:00','datetime-local',null,true),...(ch?[field('Player A','playerAId',item.playerAId||players[0]?.id,'text',players.map(p=>({value:p.id,label:p.name})),true),field('Player B','playerBId',item.playerBId||players[1]?.id,'text',players.map(p=>({value:p.id,label:p.name})),true),field('Race to','raceTo',item.raceTo||5,'number')]:[field('Home team','homeId',item.homeId||teams[0]?.id,'text',teams.map(t=>({value:t.id,label:t.name})),true),field('Away team','awayId',item.awayId||teams[1]?.id,'text',teams.map(t=>({value:t.id,label:t.name})),true)]),field('Venue','venueId',item.venueId||data.venues[0]?.id,'text',data.venues.map(v=>({value:v.id,label:v.name})),true),field('Table number','table',item.table||1,'number'),field('Queue position','queue',item.queue||1,'number'),field('Status','status',item.status||'Upcoming','text',['Upcoming','In Progress','Finished'].map(s=>({value:s,label:s}))),...(ch?[field('Player A score','scoreA',item.scoreA||0,'number'),field('Player B score','scoreB',item.scoreB||0,'number')]:[field('Home score','homeScore',item.homeScore||0,'number'),field('Away score','awayScore',item.awayScore||0,'number'),field('Notes','note',item.note||'League fixture')])];}
-    else if(baseKind==='player'){title='Add player';fields=[field('Full name','name','','text',null,true),field('Team','teamId',teams[0]?.id,'text',teams.map(t=>({value:t.id,label:t.name})),true),field('Email','email'),field('Ranking','rank',players.length+1,'number')];}
-    else if(baseKind==='edit-player'){title='Edit player';fields=[field('Full name','name',item.name,'text',null,true),field('Team','teamId',item.teamId,'text',teams.map(t=>({value:t.id,label:t.name})),true),field('Email','email',item.email),field('Ranking','rank',item.rank,'number'),field('Matches played','played',item.played,'number'),field('Wins','wins',item.wins,'number'),field('Losses','losses',item.losses,'number'),field('Frames won','framesWon',item.framesWon,'number'),field('Frames lost','framesLost',item.framesLost,'number'),field('Golden breaks','goldenBreaks',item.goldenBreaks,'number'),field('Run out BnF','runOutBnF',item.runOutBnF,'number'),field('Dry breaks','dryBreaks',item.dryBreaks,'number'),field('Successful breaks','successfulBreaks',item.successfulBreaks,'number'),field('Pots made','potsMade',item.potsMade,'number'),field('Shots taken','shotsTaken',item.shotsTaken,'number')];}
-    else if(baseKind==='team'){title='Add team';fields=[field('Team name','name','','text',null,true),field('League','leagueId',activeLeague,'text',data.leagues.map(l=>({value:l.id,label:l.name})),true)];}
-    else if(baseKind==='edit-team'){title='Edit team';fields=[field('Team name','name',item.name,'text',null,true),field('League','leagueId',item.leagueId,'text',data.leagues.map(l=>({value:l.id,label:l.name})),true),field('Played','played',item.played,'number'),field('Wins','wins',item.wins,'number'),field('Losses','losses',item.losses,'number'),field('Points','points',item.points,'number')];}
+    else if(kind==='player'){title='Add player';fields=[field('Full name','name','','text',null,true),field('Team','teamId',teams[0]?.id,'text',teams.map(t=>({value:t.id,label:t.name})),true),field('Email','email'),field('Ranking','rank',players.length+1,'number')];}
+    else if(kind==='edit-player'){title='Edit player';fields=[field('Full name','name',item.name,'text',null,true),field('Team','teamId',item.teamId,'text',teams.map(t=>({value:t.id,label:t.name})),true),field('Email','email',item.email),field('Ranking','rank',item.rank,'number'),field('Matches played','played',item.played,'number'),field('Wins','wins',item.wins,'number'),field('Losses','losses',item.losses,'number'),field('Frames won','framesWon',item.framesWon,'number'),field('Frames lost','framesLost',item.framesLost,'number'),field('Golden breaks','goldenBreaks',item.goldenBreaks,'number'),field('Run out BnF','runOutBnF',item.runOutBnF,'number'),field('Dry breaks','dryBreaks',item.dryBreaks,'number'),field('Successful breaks','successfulBreaks',item.successfulBreaks,'number'),field('Pots made','potsMade',item.potsMade,'number'),field('Shots taken','shotsTaken',item.shotsTaken,'number')];}
+    else if(kind==='team'){title='Add team';fields=[field('Team name','name','','text',null,true),field('League','leagueId',activeLeague,'text',data.leagues.map(l=>({value:l.id,label:l.name})),true)];}
+    else if(kind==='edit-team'){title='Edit team';fields=[field('Team name','name',item.name,'text',null,true),field('League','leagueId',item.leagueId,'text',data.leagues.map(l=>({value:l.id,label:l.name})),true),field('Played','played',item.played,'number'),field('Wins','wins',item.wins,'number'),field('Losses','losses',item.losses,'number'),field('Points','points',item.points,'number')];}
     else if(baseKind==='league'||baseKind==='edit-league'){title=isEdit?'Edit league':'Add league';fields=[field('League name','name',item.name||'','text',null,true),field('Season','season',item.season||'2026 Season')];}
     else if(baseKind==='venue'||baseKind==='edit-venue'){title=isEdit?'Edit venue':'Add venue';fields=[field('Venue name','name',item.name||'','text',null,true),field('Location','location',item.location||''),field('Number of tables','tables',item.tables||4,'number')];}
     else if(baseKind==='score'){const ch=modal.type==='challenge';title='Update score';fields=ch?[field(`${playerBy(item.playerAId)?.name||'Player A'} score`,'scoreA',item.scoreA||0,'number'),field(`${playerBy(item.playerBId)?.name||'Player B'} score`,'scoreB',item.scoreB||0,'number')]:[field(`${teamBy(item.homeId)?.name||'Home'} score`,'homeScore',item.homeScore||0,'number'),field(`${teamBy(item.awayId)?.name||'Away'} score`,'awayScore',item.awayScore||0,'number')];}
-    return <Modal title={title} onClose={()=>setModal(null)} wide={baseKind==='edit-player'}><form className="form-grid" onSubmit={submit}>{fields}{baseKind==='edit-player'&&<p className="form-hint">Frame difference and win percentage are calculated automatically from these values.</p>}{kind==='edit-league'&&<p className="form-hint">League edits are temporarily saved on this device only and will be lost on refresh.</p>}<div className="modal-actions"><button type="button" className="secondary-btn" onClick={()=>setModal(null)}>Cancel</button><button type="submit" className="primary-btn"><Check size={15}/> Save changes</button></div></form></Modal>;
+    return <Modal title={title} onClose={()=>setModal(null)} wide={kind==='edit-player'}><form className="form-grid" onSubmit={submit}>{fields}{kind==='edit-player'&&<p className="form-hint">Frame difference and win percentage are calculated automatically from these values.</p>}{kind==='edit-league'&&<p className="form-hint">League edits are temporarily saved on this device only and will be lost on refresh.</p>}<div className="modal-actions"><button type="button" className="secondary-btn" onClick={()=>setModal(null)}>Cancel</button><button type="submit" className="primary-btn"><Check size={15}/> Save changes</button></div></form></Modal>;
   };
 
   return <div className="app-shell"><aside className={cx('sidebar',mobileMenu&&'sidebar-open')}><div className="brand"><div className="brand-icon"><div className="brand-eight">8</div></div><div><strong>RACK<span>STATS</span></strong><small>POOL, TRACKED.</small></div><button className="mobile-close icon-btn" onClick={()=>setMobileMenu(false)}><X size={18}/></button></div><div className="league-select-wrap"><span className="nav-caption">ACTIVE LEAGUE</span><div className="league-select"><span className="league-icon"><Trophy size={15}/></span><select value={activeLeague} onChange={e=>setLeague(e.target.value)}>{data.leagues.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}</select><ChevronDown size={14}/></div><button className="secondary-btn" style={{width:'100%',marginTop:8}} onClick={()=>{setLeagueSetupMode('join');setPage('league-setup')}}>+ Join another league</button></div><div className="nav-caption nav-heading">MENU</div><nav className="side-nav">{NAV.filter(n => n.id !== 'admin' || currentRole === 'owner' || currentRole === 'organiser').map(n=><button key={n.id} className={cx('nav-item',page===n.id||(page==='player'&&n.id==='players')||(page==='match-detail'&&n.id==='matches')?'active':'')} onClick={()=>{setPage(n.id);setMobileMenu(false)}}><n.icon size={18}/><span>{n.label}</span>{n.id==='night'&&<span className="nav-live"/>}</button>)}</nav><div className="sidebar-bottom"><div className="season-card"><div className="season-icon"><Award size={17}/></div><div><strong>{league?.season||'2026 Season'}</strong><small>Season in progress</small></div><span className="green-indicator"/></div><button className="user-mini" onClick={()=>setPage('profile')}><div className="admin-avatar">RS</div><div><strong>League Admin</strong><small>Administrator</small></div><Settings size={15}/></button></div></aside>
